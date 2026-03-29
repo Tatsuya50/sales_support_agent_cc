@@ -69,6 +69,45 @@ def stream_advice(
             yield delta
 
 
+def stream_team_coaching(
+    api_key: str,
+    rep_name: str,
+    year_month: str,
+    kpi_comparison_text: str,
+    comments_text: str,
+    semantic_context: str = "",
+) -> Generator[str, None, None]:
+    """Generate a coaching comment for an underperforming rep relative to the team average."""
+    client = openai.OpenAI(api_key=api_key)
+
+    system = config.TEAM_COACHING_SYSTEM_PROMPT
+    if semantic_context:
+        system = f"{system}\n\n{semantic_context}"
+
+    user_prompt = (
+        f"【担当者】{rep_name}\n"
+        f"【分析対象月】{year_month}\n\n"
+        f"【KPI実績 vs チーム平均】\n{kpi_comparison_text}\n\n"
+        f"【直近の上長指示コメント】\n{comments_text}\n\n"
+        f"上記の情報をもとに、{rep_name}さんへの指導コメントを作成してください。"
+    )
+
+    stream = client.chat.completions.create(
+        model=config.OPENAI_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=500,
+        temperature=config.TEMPERATURE,
+        stream=True,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta is not None:
+            yield delta
+
+
 def stream_chat(
     api_key: str,
     messages: list[dict],
