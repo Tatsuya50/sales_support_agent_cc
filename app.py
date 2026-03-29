@@ -252,14 +252,9 @@ with tab_team:
         "チーム全体のKPI平均と比較し、活動量が大きく乖離している担当者を抽出して指導コメントを生成します。"
     )
 
-    # 全月リスト（担当者フィルタなし）
-    all_months = sorted(kpi_df["year_month"].unique().tolist())
-    team_month = st.selectbox(
-        "分析対象月",
-        all_months,
-        index=len(all_months) - 1,
-        key="team_month_select",
-    )
+    # サイドバーの分析対象月と連動
+    team_month = selected_month
+    st.info(f"分析対象月: **{team_month}**　（サイドバーの「分析対象月」と連動しています）")
 
     # 月が変わったらキャッシュをクリア
     if st.session_state.get("_team_month") != team_month:
