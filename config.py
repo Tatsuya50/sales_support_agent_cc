@@ -7,6 +7,14 @@ TEMPERATURE = 0.4
 
 KPI_COLUMNS = ["新規顧客訪問数", "既存顧客訪問数", "見積送付数", "上長同席数"]
 
+# gpt-4o-mini 料金（$/1M tokens、2025年時点）
+TOKEN_PRICE_INPUT_PER_M = 0.150
+TOKEN_PRICE_OUTPUT_PER_M = 0.600
+
+# コンテキストウィンドウ上限（gpt-4o-mini: 128k）
+CONTEXT_WINDOW_TOKENS = 128_000
+CONTEXT_WARN_THRESHOLD = 0.80  # 入力トークンが上限の80%を超えたら警告
+
 PRIORITY_ORDER = {"高": 1, "中": 2, "低": 3}
 
 TEAM_COACHING_SYSTEM_PROMPT = """あなたは営業マネージャーのAIアシスタントです。

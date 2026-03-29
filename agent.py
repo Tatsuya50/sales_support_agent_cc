@@ -45,6 +45,7 @@ def stream_advice(
     kpi_text: str,
     comments_text: str,
     semantic_context: str = "",
+    usage_out: dict | None = None,
 ) -> Generator[str, None, None]:
     client = openai.OpenAI(api_key=api_key)
     user_prompt = build_user_prompt(rep_name, year_month, kpi_text, comments_text)
@@ -62,8 +63,19 @@ def stream_advice(
         max_tokens=config.MAX_TOKENS,
         temperature=config.TEMPERATURE,
         stream=True,
+        stream_options={"include_usage": True},
     )
     for chunk in stream:
+        if chunk.usage and usage_out is not None:
+            usage_out.update({
+                "prompt_tokens": chunk.usage.prompt_tokens,
+                "completion_tokens": chunk.usage.completion_tokens,
+                "total_tokens": chunk.usage.total_tokens,
+            })
+        if not chunk.choices:
+            continue
+        if chunk.choices[0].finish_reason and usage_out is not None:
+            usage_out["finish_reason"] = chunk.choices[0].finish_reason
         delta = chunk.choices[0].delta.content
         if delta is not None:
             yield delta
@@ -76,6 +88,7 @@ def stream_team_coaching(
     kpi_comparison_text: str,
     comments_text: str,
     semantic_context: str = "",
+    usage_out: dict | None = None,
 ) -> Generator[str, None, None]:
     """Generate a coaching comment for an underperforming rep relative to the team average."""
     client = openai.OpenAI(api_key=api_key)
@@ -101,8 +114,19 @@ def stream_team_coaching(
         max_tokens=500,
         temperature=config.TEMPERATURE,
         stream=True,
+        stream_options={"include_usage": True},
     )
     for chunk in stream:
+        if chunk.usage and usage_out is not None:
+            usage_out.update({
+                "prompt_tokens": chunk.usage.prompt_tokens,
+                "completion_tokens": chunk.usage.completion_tokens,
+                "total_tokens": chunk.usage.total_tokens,
+            })
+        if not chunk.choices:
+            continue
+        if chunk.choices[0].finish_reason and usage_out is not None:
+            usage_out["finish_reason"] = chunk.choices[0].finish_reason
         delta = chunk.choices[0].delta.content
         if delta is not None:
             yield delta
@@ -111,6 +135,7 @@ def stream_team_coaching(
 def stream_chat(
     api_key: str,
     messages: list[dict],
+    usage_out: dict | None = None,
 ) -> Generator[str, None, None]:
     client = openai.OpenAI(api_key=api_key)
 
@@ -120,8 +145,19 @@ def stream_chat(
         max_tokens=800,
         temperature=config.TEMPERATURE,
         stream=True,
+        stream_options={"include_usage": True},
     )
     for chunk in stream:
+        if chunk.usage and usage_out is not None:
+            usage_out.update({
+                "prompt_tokens": chunk.usage.prompt_tokens,
+                "completion_tokens": chunk.usage.completion_tokens,
+                "total_tokens": chunk.usage.total_tokens,
+            })
+        if not chunk.choices:
+            continue
+        if chunk.choices[0].finish_reason and usage_out is not None:
+            usage_out["finish_reason"] = chunk.choices[0].finish_reason
         delta = chunk.choices[0].delta.content
         if delta is not None:
             yield delta

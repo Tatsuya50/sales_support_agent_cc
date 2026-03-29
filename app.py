@@ -10,6 +10,31 @@ import config
 st.set_page_config(page_title="営業サポートエージェント", layout="wide")
 
 
+def _show_usage(usage: dict) -> None:
+    """トークン使用量・推定コストを st.caption で表示し、必要に応じて警告を出す。"""
+    p = usage.get("prompt_tokens", 0)
+    c = usage.get("completion_tokens", 0)
+    t = usage.get("total_tokens", 0)
+    cost = (p * config.TOKEN_PRICE_INPUT_PER_M + c * config.TOKEN_PRICE_OUTPUT_PER_M) / 1_000_000
+    st.caption(f"トークン: 入力 {p:,} / 出力 {c:,} / 合計 {t:,}　（推定コスト: ${cost:.5f}）")
+
+    if usage.get("finish_reason") == "length":
+        st.warning(
+            "出力が上限トークン数 (max_tokens) に達したため、応答が途中で切れています。"
+            " config.py の MAX_TOKENS を増やすか、入力を短くしてください。",
+            icon="⚠️",
+        )
+
+    ctx_pct = p / config.CONTEXT_WINDOW_TOKENS
+    if ctx_pct >= config.CONTEXT_WARN_THRESHOLD:
+        st.warning(
+            f"入力トークン ({p:,}) がコンテキスト上限 ({config.CONTEXT_WINDOW_TOKENS:,}) の"
+            f" {ctx_pct * 100:.0f}% に達しています。"
+            " チャット履歴が長い場合はリセットを検討してください。",
+            icon="⚠️",
+        )
+
+
 def get_api_key() -> str | None:
     if "OPENAI_API_KEY" in st.secrets:
         return st.secrets["OPENAI_API_KEY"]
@@ -67,6 +92,7 @@ if st.session_state.get("_context_key") != context_key:
     st.session_state["_context_key"] = context_key
     st.session_state["chat_messages"] = []
     st.session_state["advice_result"] = None
+    st.session_state["advice_usage"] = None
 
 
 # ── セマンティックレイヤー読み込み ──────────────────────────────────────────
@@ -144,8 +170,10 @@ with tab_advice:
 
     if generate_clicked:
         st.session_state["advice_result"] = None
+        st.session_state["advice_usage"] = None
         with st.spinner("AIがアドバイスを生成中..."):
             try:
+                usage_out: dict = {}
                 result = st.write_stream(
                     agent.stream_advice(
                         api_key=api_key,
@@ -154,13 +182,19 @@ with tab_advice:
                         kpi_text=kpi_text,
                         comments_text=comments_text,
                         semantic_context=semantic_context,
+                        usage_out=usage_out,
                     )
                 )
                 st.session_state["advice_result"] = result
+                st.session_state["advice_usage"] = usage_out
+                if usage_out:
+                    _show_usage(usage_out)
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
     elif st.session_state.get("advice_result"):
         st.write(st.session_state["advice_result"])
+        if usage := st.session_state.get("advice_usage"):
+            _show_usage(usage)
     else:
         st.caption("「AIアドバイスを生成」ボタンを押すとアドバイスが表示されます。")
 
@@ -182,6 +216,8 @@ with tab_chat:
     for msg in st.session_state.get("chat_messages", []):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+            if msg["role"] == "assistant" and msg.get("usage"):
+                _show_usage(msg["usage"])
 
     user_input = st.chat_input(
         "質問を入力してください（例: 新規顧客獲得のためにどんなアプローチが有効ですか？）",
@@ -199,12 +235,19 @@ with tab_chat:
                     {"role": "system", "content": chat_system_prompt}
                 ] + st.session_state["chat_messages"]
 
+                usage_out: dict = {}
                 response = st.write_stream(
-                    agent.stream_chat(api_key=api_key, messages=messages_for_api)
+                    agent.stream_chat(
+                        api_key=api_key,
+                        messages=messages_for_api,
+                        usage_out=usage_out,
+                    )
                 )
                 st.session_state["chat_messages"].append(
-                    {"role": "assistant", "content": response}
+                    {"role": "assistant", "content": response, "usage": usage_out}
                 )
+                if usage_out:
+                    _show_usage(usage_out)
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
 
@@ -388,6 +431,7 @@ with tab_team:
 
                 st.markdown("**指導コメント**")
                 with st.spinner(f"{rep_name}さんの指導コメントを生成中..."):
+                    usage_out: dict = {}
                     try:
                         coaching = st.write_stream(
                             agent.stream_team_coaching(
@@ -397,8 +441,11 @@ with tab_team:
                                 kpi_comparison_text=kpi_comparison_text,
                                 comments_text=comments_text_team,
                                 semantic_context=semantic_context,
+                                usage_out=usage_out,
                             )
                         )
+                        if usage_out:
+                            _show_usage(usage_out)
                     except Exception as e:
                         coaching = f"（生成エラー: {e}）"
                         st.error(coaching)
@@ -409,6 +456,7 @@ with tab_team:
                 "kpi_metrics": kpi_metrics,
                 "recent_rows": recent_rows,
                 "coaching": coaching,
+                "usage": usage_out,
             })
 
     # ── キャッシュ結果の復元表示 ─────────────────────────────────────────
@@ -446,3 +494,5 @@ with tab_team:
 
                 st.markdown("**指導コメント**")
                 st.write(item["coaching"])
+                if item.get("usage"):
+                    _show_usage(item["usage"])
