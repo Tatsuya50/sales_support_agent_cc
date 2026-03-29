@@ -23,9 +23,13 @@ def build_chat_system_prompt(
     year_month: str,
     kpi_text: str,
     comments_text: str,
+    semantic_context: str = "",
 ) -> str:
+    base = config.SYSTEM_PROMPT
+    if semantic_context:
+        base = f"{base}\n\n{semantic_context}"
     return (
-        f"{config.SYSTEM_PROMPT}\n\n"
+        f"{base}\n\n"
         f"以下は現在選択されている担当者の情報です。この情報をもとに自由に会話してください。\n\n"
         f"【担当者】{rep_name}\n"
         f"【分析対象月】{year_month}\n\n"
@@ -40,14 +44,19 @@ def stream_advice(
     year_month: str,
     kpi_text: str,
     comments_text: str,
+    semantic_context: str = "",
 ) -> Generator[str, None, None]:
     client = openai.OpenAI(api_key=api_key)
     user_prompt = build_user_prompt(rep_name, year_month, kpi_text, comments_text)
 
+    system = config.SYSTEM_PROMPT
+    if semantic_context:
+        system = f"{system}\n\n{semantic_context}"
+
     stream = client.chat.completions.create(
         model=config.OPENAI_MODEL,
         messages=[
-            {"role": "system", "content": config.SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
         ],
         max_tokens=config.MAX_TOKENS,

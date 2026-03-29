@@ -1,8 +1,9 @@
+import json
 import streamlit as st
 import data_loader
 import data_processor
 import agent
-import config
+import semantic_loader
 
 st.set_page_config(page_title="営業サポートエージェント", layout="wide")
 
@@ -38,7 +39,6 @@ with st.sidebar:
 
     st.divider()
 
-    # APIキー設定 — session_stateに保存してから get_api_key() で参照する
     with st.expander("APIキー設定"):
         entered_key = st.text_input(
             "OpenAI APIキー",
@@ -49,7 +49,6 @@ with st.sidebar:
         if entered_key:
             st.session_state["api_key"] = entered_key
 
-    # ウィジェット処理後に取得するため rerun 不要
     api_key = get_api_key()
     if not api_key:
         st.warning("APIキーを設定してください。")
@@ -61,6 +60,11 @@ if st.session_state.get("_context_key") != context_key:
     st.session_state["_context_key"] = context_key
     st.session_state["chat_messages"] = []
     st.session_state["advice_result"] = None
+
+
+# ── セマンティックレイヤー読み込み ──────────────────────────────────────────
+semantic = semantic_loader.load()
+semantic_context = semantic_loader.format_for_prompt(semantic)
 
 
 # ── 共通データ ──────────────────────────────────────────────────────────────
@@ -82,10 +86,25 @@ else:
     for col, (_, row) in zip(cols, kpi_summary.iterrows()):
         delta_val = int(row["delta"]) if row["delta"] is not None else None
         delta_str = f"{delta_val:+d}件" if delta_val is not None else None
+
+        # セマンティックレイヤーのベンチマークを使ってヘルプテキストを生成
+        kpi_info = semantic.get("kpis", {}).get(row["kpi_name"], {})
+        benchmarks = kpi_info.get("benchmarks", {})
+        help_text = None
+        if benchmarks:
+            parts = []
+            if w := benchmarks.get("warning"):
+                parts.append(f"要改善: {w.get('below')}件未満")
+            if g := benchmarks.get("good"):
+                parts.append(f"良好: {g.get('at_least')}件以上")
+            if parts:
+                help_text = " / ".join(parts)
+
         col.metric(
             label=row["kpi_name"],
             value=f"{row['actual']}件",
             delta=delta_str,
+            help=help_text,
         )
 
 # 上長コメント
@@ -102,8 +121,10 @@ with st.expander("上長コメント・指示事項", expanded=True):
 
 st.divider()
 
-# ── タブ：AIアドバイス / フリーチャット ─────────────────────────────────────
-tab_advice, tab_chat = st.tabs(["AIアドバイス", "フリーチャット"])
+# ── タブ：AIアドバイス / フリーチャット / セマンティックレイヤー設定 ──────────
+tab_advice, tab_chat, tab_semantic = st.tabs(
+    ["AIアドバイス", "フリーチャット", "セマンティックレイヤー設定"]
+)
 
 # ── AIアドバイスタブ ─────────────────────────────────────────────────────────
 with tab_advice:
@@ -125,6 +146,7 @@ with tab_advice:
                         year_month=selected_month,
                         kpi_text=kpi_text,
                         comments_text=comments_text,
+                        semantic_context=semantic_context,
                     )
                 )
                 st.session_state["advice_result"] = result
@@ -139,7 +161,7 @@ with tab_advice:
 with tab_chat:
     st.caption(
         f"{selected_name}さんの営業活動について自由に質問できます。"
-        f"KPIデータと上長コメントをコンテキストとして参照します。"
+        f"KPIデータ・上長コメント・セマンティックレイヤーをコンテキストとして参照します。"
     )
 
     chat_system_prompt = agent.build_chat_system_prompt(
@@ -147,14 +169,13 @@ with tab_chat:
         year_month=selected_month,
         kpi_text=kpi_text,
         comments_text=comments_text,
+        semantic_context=semantic_context,
     )
 
-    # 会話履歴を表示
     for msg in st.session_state.get("chat_messages", []):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    # ユーザー入力
     user_input = st.chat_input(
         "質問を入力してください（例: 新規顧客獲得のためにどんなアプローチが有効ですか？）",
         disabled=not api_key,
@@ -182,3 +203,43 @@ with tab_chat:
 
     if not api_key:
         st.info("APIキーをサイドバーで設定すると会話できます。")
+
+# ── セマンティックレイヤー設定タブ ───────────────────────────────────────────
+with tab_semantic:
+    st.caption(
+        "KPIの定義・ベンチマーク・コーチング観点などをJSON形式で管理します。"
+        "ここで設定した内容はAIアドバイスとチャットの両方に反映されます。"
+    )
+
+    # ── JSONエディタ ────────────────────────────────────────────────────────
+    try:
+        with open(semantic_loader.SEMANTIC_LAYER_PATH, "r", encoding="utf-8") as f:
+            current_json_str = f.read()
+    except FileNotFoundError:
+        current_json_str = "{}"
+
+    edited_json_str = st.text_area(
+        "セマンティックレイヤー（JSON）",
+        value=current_json_str,
+        height=500,
+        help="KPI定義・ベンチマーク・カテゴリ定義などを編集できます。保存するとAIへの送信内容に即時反映されます。",
+    )
+
+    if st.button("保存", type="primary", key="btn_save_semantic"):
+        try:
+            parsed = json.loads(edited_json_str)
+            semantic_loader.save(parsed)
+            st.success("保存しました。次回のAI生成から反映されます。")
+            st.rerun()
+        except json.JSONDecodeError as e:
+            st.error(f"JSON形式エラー: {e}")
+
+    st.divider()
+
+    # ── AIへの送信内容プレビュー ────────────────────────────────────────────
+    with st.expander("AIへの送信内容プレビュー", expanded=False):
+        st.caption("現在のセマンティックレイヤーをAIに渡す際のテキスト形式です。")
+        if semantic_context:
+            st.code(semantic_context, language=None)
+        else:
+            st.info("セマンティックレイヤーが未設定です。")
