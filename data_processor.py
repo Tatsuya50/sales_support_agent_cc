@@ -2,14 +2,18 @@ import pandas as pd
 import config
 
 
-def get_rep_list(kpi_df: pd.DataFrame) -> list[tuple[str, str]]:
-    """Returns [(rep_id, rep_name), ...] sorted by rep_id."""
-    pairs = (
-        kpi_df[["rep_id", "rep_name"]]
-        .drop_duplicates()
-        .sort_values("rep_id")
-    )
-    return list(zip(pairs["rep_id"], pairs["rep_name"]))
+def get_office_list(kpi_df: pd.DataFrame) -> list[str]:
+    """Returns sorted list of unique office names."""
+    return sorted(kpi_df["office"].dropna().unique().tolist())
+
+
+def get_rep_list(kpi_df: pd.DataFrame, office: str | None = None) -> list[tuple[str, str]]:
+    """Returns [(rep_id, rep_name), ...] sorted by rep_id, optionally filtered by office."""
+    df = kpi_df[["rep_id", "rep_name", "office"]].drop_duplicates()
+    if office:
+        df = df[df["office"] == office]
+    df = df.sort_values("rep_id")
+    return list(zip(df["rep_id"], df["rep_name"]))
 
 
 def get_available_months(kpi_df: pd.DataFrame, rep_id: str) -> list[str]:
@@ -84,29 +88,37 @@ def calculate_team_kpi_average(kpi_df: pd.DataFrame, year_month: str) -> pd.Seri
 
 
 def find_underperformers(
-    kpi_df: pd.DataFrame, year_month: str, top_n: int = 5
+    kpi_df: pd.DataFrame, year_month: str, top_n: int = 5, office: str | None = None
 ) -> pd.DataFrame:
     """
-    Identifies reps with the largest negative deviation from the team average.
-    deviation_score = sum of (actual - avg) / avg * 100 for each KPI.
+    Identifies reps with the largest negative deviation from the GLOBAL team average.
+    - Global average: all reps in the given month (office-agnostic)
+    - Candidates: filtered to `office` if specified, otherwise all reps
+    deviation_score = sum of (actual - global_avg) / global_avg * 100 for each KPI.
     Returns top_n rows sorted ascending by deviation_score (most negative first).
     """
     month_df = kpi_df[kpi_df["year_month"] == year_month].copy()
     if month_df.empty:
         return pd.DataFrame()
 
-    avg = month_df[config.KPI_COLUMNS].mean()
+    # 全体平均（営業所フィルタなし）
+    global_avg = month_df[config.KPI_COLUMNS].mean()
+
+    # 抽出対象：選択営業所のみ（指定なしは全体）
+    candidates = month_df[month_df["office"] == office].copy() if office else month_df.copy()
+    if candidates.empty:
+        return pd.DataFrame()
 
     for col in config.KPI_COLUMNS:
-        month_df[f"{col}_avg"] = round(avg[col], 1)
-        denom = avg[col] if avg[col] > 0 else 1
-        month_df[f"{col}_deviation_pct"] = (month_df[col] - avg[col]) / denom * 100
+        candidates[f"{col}_avg"] = round(global_avg[col], 1)
+        denom = global_avg[col] if global_avg[col] > 0 else 1
+        candidates[f"{col}_deviation_pct"] = (candidates[col] - global_avg[col]) / denom * 100
 
     deviation_cols = [f"{col}_deviation_pct" for col in config.KPI_COLUMNS]
-    month_df["deviation_score"] = month_df[deviation_cols].sum(axis=1).round(1)
+    candidates["deviation_score"] = candidates[deviation_cols].sum(axis=1).round(1)
 
     return (
-        month_df
+        candidates
         .sort_values("deviation_score")
         .head(top_n)
         .reset_index(drop=True)

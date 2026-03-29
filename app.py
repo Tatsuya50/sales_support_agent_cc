@@ -25,7 +25,12 @@ with st.sidebar:
     kpi_df = data_loader.load_kpi_data()
     comments_df = data_loader.load_comments_data()
 
-    rep_list = data_processor.get_rep_list(kpi_df)
+    offices = data_processor.get_office_list(kpi_df)
+    office_options = ["全体"] + offices
+    selected_office = st.selectbox("営業所を選択", office_options)
+    filter_office = selected_office if selected_office != "全体" else None
+
+    rep_list = data_processor.get_rep_list(kpi_df, office=filter_office)
     rep_names = [name for _, name in rep_list]
     rep_ids = [rid for rid, _ in rep_list]
 
@@ -252,21 +257,30 @@ with tab_team:
         "チーム全体のKPI平均と比較し、活動量が大きく乖離している担当者を抽出して指導コメントを生成します。"
     )
 
-    # サイドバーの分析対象月と連動
+    # サイドバーの分析対象月・営業所と連動
     team_month = selected_month
-    st.info(f"分析対象月: **{team_month}**　（サイドバーの「分析対象月」と連動しています）")
+    st.info(
+        f"分析対象月: **{team_month}**　／　"
+        f"営業所フィルター: **{selected_office}**　"
+        f"（サイドバーと連動）"
+    )
 
-    # 月が変わったらキャッシュをクリア
-    if st.session_state.get("_team_month") != team_month:
-        st.session_state["_team_month"] = team_month
+    # 月または営業所が変わったらキャッシュをクリア
+    team_cache_key = f"{team_month}_{selected_office}"
+    if st.session_state.get("_team_cache_key") != team_cache_key:
+        st.session_state["_team_cache_key"] = team_cache_key
         st.session_state["team_results"] = None
 
-    # ── チームKPI一覧テーブル（常時表示） ────────────────────────────────
-    st.subheader("チームKPI一覧")
+    # 全体平均（営業所フィルタなし）・抽出は選択営業所のみ
     team_avg = data_processor.calculate_team_kpi_average(kpi_df, team_month)
-    underperformers_df = data_processor.find_underperformers(kpi_df, team_month, top_n=5)
+    underperformers_df = data_processor.find_underperformers(
+        kpi_df, team_month, top_n=5, office=filter_office
+    )
 
+    # テーブル表示は選択営業所でフィルタ（全体選択時は全員）
     all_month_df = kpi_df[kpi_df["year_month"] == team_month].copy()
+    if filter_office:
+        all_month_df = all_month_df[all_month_df["office"] == filter_office].copy()
     if all_month_df.empty:
         st.info("選択された月のデータがありません。")
     else:
@@ -300,7 +314,7 @@ with tab_team:
         avg_row["担当者名"] = "【チーム平均】"
         avg_row["偏差スコア"] = "0.0"
         st.caption(
-            "チーム平均 — "
+            "全体平均（全営業所） — "
             + " / ".join(f"{col}: {team_avg[col]:.1f}件" for col in config.KPI_COLUMNS)
         )
 
