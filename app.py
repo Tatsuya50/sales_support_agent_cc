@@ -291,7 +291,7 @@ with tab_team:
 
         def highlight_low(row):
             if row.name in low_idx:
-                return ["background-color: #fff3cd"] * len(row)
+                return ["background-color: #c0392b; color: white"] * len(row)
             return [""] * len(row)
 
         st.dataframe(
