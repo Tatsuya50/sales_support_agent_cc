@@ -81,10 +81,15 @@ def get_rep_comments(comments_df: pd.DataFrame, rep_id: str) -> pd.DataFrame:
 
 # ── チーム分析用関数 ────────────────────────────────────────────────────────
 
-def add_composite_kpis(df: pd.DataFrame) -> pd.DataFrame:
-    """COMPOSITE_KPIS の定義に従って複合KPI列をDataFrameに追加して返す。"""
+def add_composite_kpis(
+    df: pd.DataFrame,
+    composite_kpis: dict[str, list[str]] | None = None,
+) -> pd.DataFrame:
+    """composite_kpis の定義に従って複合KPI列をDataFrameに追加して返す。
+    composite_kpis=None の場合は何も追加せず元のDataFrameのコピーを返す。
+    """
     df = df.copy()
-    for name, sources in config.COMPOSITE_KPIS.items():
+    for name, sources in (composite_kpis or {}).items():
         df[name] = df[sources].sum(axis=1)
     return df
 
@@ -94,15 +99,16 @@ def calculate_group_kpi_average(
     year_month: str,
     office: str | None = None,
     kpi_cols: list[str] | None = None,
+    composite_kpis: dict[str, list[str]] | None = None,
 ) -> pd.Series:
     """指定月・グループの KPI（複合KPI含む）の平均を返す。
-    office=None で全体平均、kpi_cols=None で ALL_KPI_OPTIONS を使用。
+    office=None で全体平均、kpi_cols=None で config.KPI_COLUMNS を使用。
     """
-    df = add_composite_kpis(kpi_df)
+    df = add_composite_kpis(kpi_df, composite_kpis)
     month_df = df[df["year_month"] == year_month]
     if office:
         month_df = month_df[month_df["office"] == office]
-    cols = kpi_cols or config.ALL_KPI_OPTIONS
+    cols = kpi_cols or config.KPI_COLUMNS
     return month_df[cols].mean()
 
 
@@ -113,6 +119,7 @@ def find_underperformers(
     baseline_office: str | None = None,
     target_office: str | None = None,
     kpi_cols: list[str] | None = None,
+    composite_kpis: dict[str, list[str]] | None = None,
 ) -> pd.DataFrame:
     """
     baseline_office の平均を基準に、target_office の担当者の偏差スコアを算出。
@@ -120,7 +127,7 @@ def find_underperformers(
     kpi_cols=None → config.KPI_COLUMNS を使用。
     偏差スコア昇順（最も乖離が大きい順）に top_n 件を返す。
     """
-    df = add_composite_kpis(kpi_df)
+    df = add_composite_kpis(kpi_df, composite_kpis)
     month_df = df[df["year_month"] == year_month].copy()
     if month_df.empty:
         return pd.DataFrame()

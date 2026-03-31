@@ -18,6 +18,15 @@ def save(data: dict) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def get_composite_kpis(semantic: dict) -> dict[str, list[str]]:
+    """Returns {kpi_name: [source_col, ...]} for KPIs that have a 'sources' field."""
+    result = {}
+    for name, info in semantic.get("kpis", {}).items():
+        if sources := info.get("sources"):
+            result[name] = sources
+    return result
+
+
 def format_for_prompt(semantic: dict) -> str:
     """Format the semantic layer as structured text for injection into LLM prompts."""
     if not semantic:
@@ -34,6 +43,8 @@ def format_for_prompt(semantic: dict) -> str:
         lines.append("【KPI定義・判断基準】")
         for kpi_name, info in kpis.items():
             block = [f"■ {kpi_name}"]
+            if v := info.get("sources"):
+                block.append(f"  合算元: {' + '.join(v)}")
             if v := info.get("description"):
                 block.append(f"  定義: {v}")
             if v := info.get("business_impact"):

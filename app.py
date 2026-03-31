@@ -98,6 +98,8 @@ if st.session_state.get("_context_key") != context_key:
 # ── セマンティックレイヤー読み込み ──────────────────────────────────────────
 semantic = semantic_loader.load()
 semantic_context = semantic_loader.format_for_prompt(semantic)
+composite_kpis = semantic_loader.get_composite_kpis(semantic)
+all_kpi_options = config.KPI_COLUMNS + list(composite_kpis.keys())
 
 
 # ── 共通データ ──────────────────────────────────────────────────────────────
@@ -328,7 +330,7 @@ with tab_team:
     # ── KPI選択 ──────────────────────────────────────────────────────────
     selected_kpis = st.multiselect(
         "分析に使用するKPI",
-        config.ALL_KPI_OPTIONS,
+        all_kpi_options,
         default=config.KPI_COLUMNS,
         key="team_selected_kpis",
     )
@@ -344,18 +346,21 @@ with tab_team:
 
     # ── データ計算 ────────────────────────────────────────────────────────
     team_avg = data_processor.calculate_group_kpi_average(
-        kpi_df, team_month, office=baseline_office, kpi_cols=selected_kpis
+        kpi_df, team_month, office=baseline_office, kpi_cols=selected_kpis,
+        composite_kpis=composite_kpis,
     )
     underperformers_df = data_processor.find_underperformers(
         kpi_df, team_month, top_n=5,
         baseline_office=baseline_office,
         target_office=target_office,
         kpi_cols=selected_kpis,
+        composite_kpis=composite_kpis,
     )
 
     # ── チームKPI一覧テーブル ─────────────────────────────────────────────
     all_month_df = data_processor.add_composite_kpis(
-        kpi_df[kpi_df["year_month"] == team_month].copy()
+        kpi_df[kpi_df["year_month"] == team_month].copy(),
+        composite_kpis,
     )
     if target_office:
         all_month_df = all_month_df[all_month_df["office"] == target_office].copy()
