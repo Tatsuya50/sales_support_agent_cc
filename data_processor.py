@@ -81,40 +81,69 @@ def get_rep_comments(comments_df: pd.DataFrame, rep_id: str) -> pd.DataFrame:
 
 # ── チーム分析用関数 ────────────────────────────────────────────────────────
 
-def calculate_team_kpi_average(kpi_df: pd.DataFrame, year_month: str) -> pd.Series:
-    """Returns Series of mean KPI values across all reps for the given month."""
-    month_df = kpi_df[kpi_df["year_month"] == year_month]
-    return month_df[config.KPI_COLUMNS].mean()
+def add_composite_kpis(df: pd.DataFrame) -> pd.DataFrame:
+    """COMPOSITE_KPIS の定義に従って複合KPI列をDataFrameに追加して返す。"""
+    df = df.copy()
+    for name, sources in config.COMPOSITE_KPIS.items():
+        df[name] = df[sources].sum(axis=1)
+    return df
+
+
+def calculate_group_kpi_average(
+    kpi_df: pd.DataFrame,
+    year_month: str,
+    office: str | None = None,
+    kpi_cols: list[str] | None = None,
+) -> pd.Series:
+    """指定月・グループの KPI（複合KPI含む）の平均を返す。
+    office=None で全体平均、kpi_cols=None で ALL_KPI_OPTIONS を使用。
+    """
+    df = add_composite_kpis(kpi_df)
+    month_df = df[df["year_month"] == year_month]
+    if office:
+        month_df = month_df[month_df["office"] == office]
+    cols = kpi_cols or config.ALL_KPI_OPTIONS
+    return month_df[cols].mean()
 
 
 def find_underperformers(
-    kpi_df: pd.DataFrame, year_month: str, top_n: int = 5, office: str | None = None
+    kpi_df: pd.DataFrame,
+    year_month: str,
+    top_n: int = 5,
+    baseline_office: str | None = None,
+    target_office: str | None = None,
+    kpi_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Identifies reps with the largest negative deviation from the GLOBAL team average.
-    - Global average: all reps in the given month (office-agnostic)
-    - Candidates: filtered to `office` if specified, otherwise all reps
-    deviation_score = sum of (actual - global_avg) / global_avg * 100 for each KPI.
-    Returns top_n rows sorted ascending by deviation_score (most negative first).
+    baseline_office の平均を基準に、target_office の担当者の偏差スコアを算出。
+    baseline_office=None → 全体平均、target_office=None → 全担当者が対象。
+    kpi_cols=None → config.KPI_COLUMNS を使用。
+    偏差スコア昇順（最も乖離が大きい順）に top_n 件を返す。
     """
-    month_df = kpi_df[kpi_df["year_month"] == year_month].copy()
+    df = add_composite_kpis(kpi_df)
+    month_df = df[df["year_month"] == year_month].copy()
     if month_df.empty:
         return pd.DataFrame()
 
-    # 全体平均（営業所フィルタなし）
-    global_avg = month_df[config.KPI_COLUMNS].mean()
+    cols = kpi_cols or config.KPI_COLUMNS
 
-    # 抽出対象：選択営業所のみ（指定なしは全体）
-    candidates = month_df[month_df["office"] == office].copy() if office else month_df.copy()
+    # 基準グループの平均
+    base_df = month_df if baseline_office is None else month_df[month_df["office"] == baseline_office]
+    if base_df.empty:
+        return pd.DataFrame()
+    group_avg = base_df[cols].mean()
+
+    # 比較対象の候補
+    candidates = month_df if target_office is None else month_df[month_df["office"] == target_office].copy()
     if candidates.empty:
         return pd.DataFrame()
 
-    for col in config.KPI_COLUMNS:
-        candidates[f"{col}_avg"] = round(global_avg[col], 1)
-        denom = global_avg[col] if global_avg[col] > 0 else 1
-        candidates[f"{col}_deviation_pct"] = (candidates[col] - global_avg[col]) / denom * 100
+    for col in cols:
+        candidates[f"{col}_avg"] = round(group_avg[col], 1)
+        denom = group_avg[col] if group_avg[col] > 0 else 1
+        candidates[f"{col}_deviation_pct"] = (candidates[col] - group_avg[col]) / denom * 100
 
-    deviation_cols = [f"{col}_deviation_pct" for col in config.KPI_COLUMNS]
+    deviation_cols = [f"{col}_deviation_pct" for col in cols]
     candidates["deviation_score"] = candidates[deviation_cols].sum(axis=1).round(1)
 
     return (
@@ -133,18 +162,24 @@ def get_recent_comments(
     return df.sort_values("activity_date", ascending=False).head(n).reset_index(drop=True)
 
 
-def format_team_comparison_for_prompt(rep_row: pd.Series, avg: pd.Series) -> str:
-    """Formats rep KPI vs team average as text for the LLM prompt."""
+def format_team_comparison_for_prompt(
+    rep_row: pd.Series,
+    avg: pd.Series,
+    kpi_cols: list[str] | None = None,
+) -> str:
+    """Formats rep KPI vs group average as text for the LLM prompt."""
+    cols = kpi_cols or config.KPI_COLUMNS
     lines = []
-    for col in config.KPI_COLUMNS:
-        actual = int(rep_row[col])
-        team_avg = avg[col]
-        diff = actual - team_avg
-        pct = diff / team_avg * 100 if team_avg > 0 else 0
+    for col in cols:
+        val = rep_row[col]
+        actual = int(val) if col in config.KPI_COLUMNS else round(float(val), 1)
+        group_avg = avg[col]
+        diff = actual - group_avg
+        pct = diff / group_avg * 100 if group_avg > 0 else 0
         sign = "+" if diff >= 0 else ""
         lines.append(
             f"- {col}: {actual}件"
-            f"（チーム平均 {team_avg:.1f}件、差分 {sign}{diff:.1f}件 / {sign}{pct:.1f}%）"
+            f"（基準平均 {group_avg:.1f}件、差分 {sign}{diff:.1f}件 / {sign}{pct:.1f}%）"
         )
     return "\n".join(lines)
 

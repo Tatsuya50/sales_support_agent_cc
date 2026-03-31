@@ -7,6 +7,14 @@ TEMPERATURE = 0.4
 
 KPI_COLUMNS = ["新規顧客訪問数", "既存顧客訪問数", "見積送付数", "上長同席数"]
 
+# 複合KPI: 表示名 → 合算するCSV列名のリスト
+COMPOSITE_KPIS: dict[str, list[str]] = {
+    "総面談数": ["新規顧客訪問数", "既存顧客訪問数"],
+}
+
+# UIに表示するKPI選択肢（単一KPI + 複合KPI）
+ALL_KPI_OPTIONS: list[str] = KPI_COLUMNS + list(COMPOSITE_KPIS.keys())
+
 # gpt-4o-mini 料金（$/1M tokens、2025年時点）
 TOKEN_PRICE_INPUT_PER_M = 0.150
 TOKEN_PRICE_OUTPUT_PER_M = 0.600

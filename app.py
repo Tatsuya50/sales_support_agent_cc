@@ -297,48 +297,82 @@ with tab_semantic:
 # ── チーム指導分析タブ ────────────────────────────────────────────────────────
 with tab_team:
     st.caption(
-        "チーム全体のKPI平均と比較し、活動量が大きく乖離している担当者を抽出して指導コメントを生成します。"
+        "基準グループの平均と比較し、活動量が大きく乖離している担当者を抽出して指導コメントを生成します。"
     )
 
-    # サイドバーの分析対象月・営業所と連動
+    # 分析対象月はサイドバーと連動
     team_month = selected_month
-    st.info(
-        f"分析対象月: **{team_month}**　／　"
-        f"営業所フィルター: **{selected_office}**　"
-        f"（サイドバーと連動）"
-    )
+    st.info(f"分析対象月: **{team_month}**（サイドバーと連動）")
 
-    # 月または営業所が変わったらキャッシュをクリア
-    team_cache_key = f"{team_month}_{selected_office}"
+    # ── グループ選択 ─────────────────────────────────────────────────────
+    offices = data_processor.get_office_list(kpi_df)
+    group_options = ["全体"] + offices
+
+    col_base, col_target = st.columns(2)
+    with col_base:
+        baseline_option = st.selectbox(
+            "基準グループ（平均の算出元）",
+            group_options,
+            key="team_baseline",
+        )
+    with col_target:
+        target_option = st.selectbox(
+            "比較対象グループ（乖離を計算する担当者の範囲）",
+            group_options,
+            key="team_target",
+        )
+
+    baseline_office = None if baseline_option == "全体" else baseline_option
+    target_office = None if target_option == "全体" else target_option
+
+    # ── KPI選択 ──────────────────────────────────────────────────────────
+    selected_kpis = st.multiselect(
+        "分析に使用するKPI",
+        config.ALL_KPI_OPTIONS,
+        default=config.KPI_COLUMNS,
+        key="team_selected_kpis",
+    )
+    if not selected_kpis:
+        st.warning("KPIを1つ以上選択してください。")
+        st.stop()
+
+    # ── キャッシュキー管理 ────────────────────────────────────────────────
+    team_cache_key = f"{team_month}_{baseline_option}_{target_option}_{'|'.join(selected_kpis)}"
     if st.session_state.get("_team_cache_key") != team_cache_key:
         st.session_state["_team_cache_key"] = team_cache_key
         st.session_state["team_results"] = None
 
-    # 全体平均（営業所フィルタなし）・抽出は選択営業所のみ
-    team_avg = data_processor.calculate_team_kpi_average(kpi_df, team_month)
+    # ── データ計算 ────────────────────────────────────────────────────────
+    team_avg = data_processor.calculate_group_kpi_average(
+        kpi_df, team_month, office=baseline_office, kpi_cols=selected_kpis
+    )
     underperformers_df = data_processor.find_underperformers(
-        kpi_df, team_month, top_n=5, office=filter_office
+        kpi_df, team_month, top_n=5,
+        baseline_office=baseline_office,
+        target_office=target_office,
+        kpi_cols=selected_kpis,
     )
 
-    # テーブル表示は選択営業所でフィルタ（全体選択時は全員）
-    all_month_df = kpi_df[kpi_df["year_month"] == team_month].copy()
-    if filter_office:
-        all_month_df = all_month_df[all_month_df["office"] == filter_office].copy()
+    # ── チームKPI一覧テーブル ─────────────────────────────────────────────
+    all_month_df = data_processor.add_composite_kpis(
+        kpi_df[kpi_df["year_month"] == team_month].copy()
+    )
+    if target_office:
+        all_month_df = all_month_df[all_month_df["office"] == target_office].copy()
+
     if all_month_df.empty:
-        st.info("選択された月のデータがありません。")
+        st.info("選択された月・グループのデータがありません。")
     else:
-        # 偏差スコアを計算して一覧に追加
-        for col in config.KPI_COLUMNS:
+        for col in selected_kpis:
             denom = team_avg[col] if team_avg[col] > 0 else 1
             all_month_df[f"{col}_dev"] = (all_month_df[col] - team_avg[col]) / denom * 100
-        dev_cols = [f"{col}_dev" for col in config.KPI_COLUMNS]
+        dev_cols = [f"{col}_dev" for col in selected_kpis]
         all_month_df["偏差スコア"] = all_month_df[dev_cols].sum(axis=1).round(1)
         all_month_df = all_month_df.sort_values("偏差スコア").reset_index(drop=True)
 
-        display_team = all_month_df[["rep_name"] + config.KPI_COLUMNS + ["偏差スコア"]].copy()
-        display_team.columns = ["担当者名"] + config.KPI_COLUMNS + ["偏差スコア"]
+        display_team = all_month_df[["rep_name"] + selected_kpis + ["偏差スコア"]].copy()
+        display_team.columns = ["担当者名"] + selected_kpis + ["偏差スコア"]
 
-        # 偏差スコアが低い上位5名のインデックスを取得してハイライト
         low_idx = set(range(min(5, len(display_team))))
 
         def highlight_low(row):
@@ -351,14 +385,9 @@ with tab_team:
             use_container_width=True,
             hide_index=True,
         )
-
-        # チーム平均行
-        avg_row = {col: f"{team_avg[col]:.1f}" for col in config.KPI_COLUMNS}
-        avg_row["担当者名"] = "【チーム平均】"
-        avg_row["偏差スコア"] = "0.0"
         st.caption(
-            "全体平均（全営業所） — "
-            + " / ".join(f"{col}: {team_avg[col]:.1f}件" for col in config.KPI_COLUMNS)
+            f"基準グループ（{baseline_option}）の平均 — "
+            + " / ".join(f"{col}: {team_avg[col]:.1f}件" for col in selected_kpis)
         )
 
     st.divider()
@@ -377,7 +406,7 @@ with tab_team:
     # ── 結果生成（ストリーミング） ────────────────────────────────────────
     if run_team:
         st.session_state["team_results"] = {"month": team_month, "items": []}
-        st.subheader("チーム平均を大きく下回る担当者（上位5名）")
+        st.subheader(f"基準（{baseline_option}）を大きく下回る担当者（上位5名）")
 
         for rank, (_, rep_row) in enumerate(underperformers_df.iterrows(), start=1):
             rep_id = rep_row["rep_id"]
@@ -385,15 +414,17 @@ with tab_team:
             deviation_score = rep_row["deviation_score"]
 
             kpi_comparison_text = data_processor.format_team_comparison_for_prompt(
-                rep_row, team_avg
+                rep_row, team_avg, kpi_cols=selected_kpis
             )
             recent_comments = data_processor.get_recent_comments(comments_df, rep_id, n=5)
             comments_text_team = data_processor.format_comments_for_prompt(recent_comments)
 
             # KPIメトリクス用データ
             kpi_metrics = [
-                (col, int(rep_row[col]), float(rep_row[f"{col}_avg"]))
-                for col in config.KPI_COLUMNS
+                (col,
+                 int(rep_row[col]) if col in config.KPI_COLUMNS else round(float(rep_row[col]), 1),
+                 float(rep_row[f"{col}_avg"]))
+                for col in selected_kpis
             ]
             # 直近コメント表示用データ
             recent_rows = []
@@ -409,13 +440,13 @@ with tab_team:
 
             with st.container(border=True):
                 st.markdown(f"### {rank}. {rep_name}　`偏差スコア: {deviation_score:+.1f}`")
-                m_cols = st.columns(len(config.KPI_COLUMNS))
+                m_cols = st.columns(len(selected_kpis))
                 for m_col, (kpi_name, actual, avg_val) in zip(m_cols, kpi_metrics):
                     diff = actual - avg_val
                     m_col.metric(
                         label=kpi_name,
                         value=f"{actual}件",
-                        delta=f"{diff:+.1f}件（平均比）",
+                        delta=f"{diff:+.1f}件（基準比）",
                         delta_color="normal",
                     )
 
@@ -465,20 +496,20 @@ with tab_team:
         and st.session_state["team_results"].get("month") == team_month
         and st.session_state["team_results"].get("items")
     ):
-        st.subheader("チーム平均を大きく下回る担当者（上位5名）")
+        st.subheader(f"基準（{baseline_option}）を大きく下回る担当者（上位5名）")
         for rank, item in enumerate(st.session_state["team_results"]["items"], start=1):
             with st.container(border=True):
                 st.markdown(
                     f"### {rank}. {item['rep_name']}　"
                     f"`偏差スコア: {item['deviation_score']:+.1f}`"
                 )
-                m_cols = st.columns(len(config.KPI_COLUMNS))
+                m_cols = st.columns(len(item["kpi_metrics"]))
                 for m_col, (kpi_name, actual, avg_val) in zip(m_cols, item["kpi_metrics"]):
                     diff = actual - avg_val
                     m_col.metric(
                         label=kpi_name,
                         value=f"{actual}件",
-                        delta=f"{diff:+.1f}件（平均比）",
+                        delta=f"{diff:+.1f}件（基準比）",
                         delta_color="normal",
                     )
 
